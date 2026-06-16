@@ -1,0 +1,159 @@
+{
+  "nodes": {
+    "brad-utils": {
+      "locked": {
+        "lastModified": 1764747053,
+        "narHash": "sha256-+qgEhcroXUr0j7DvkQn9JyswPDS36OdZU/J/82P4ZIA=",
+        "owner": "Brad-Hesson",
+        "repo": "brad-utils",
+        "rev": "94c30b9a35da10bcead13fed0eaa07cbe41668bb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Brad-Hesson",
+        "repo": "brad-utils",
+        "type": "github"
+      }
+    },
+    "crane": {
+      "locked": {
+        "lastModified": 1780532242,
+        "narHash": "sha256-D+BsdpxmtUwtqGoY0IXPhHgTlmqgcZKCEo1oMyn7ep0=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "59a82a1222dd3b2080b5cc52a1a2e8d5f1b77f37",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "fenix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-analyzer-src": "rust-analyzer-src"
+      },
+      "locked": {
+        "lastModified": 1781609335,
+        "narHash": "sha256-18sPXKaSCsA7QliUlaiH3ADArJ7Bv+8ZscW2BXJLkoE=",
+        "owner": "nix-community",
+        "repo": "fenix",
+        "rev": "dccb895d0e31771153302845c2b85699f935bd7e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "fenix",
+        "type": "github"
+      }
+    },
+    "flake-utils": {
+      "inputs": {
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1781607440,
+        "narHash": "sha256-rxO+uc/KFbSJp+pgyXRuAX6QlG9hJdnt0BXpEQRXY+U=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3e41b24abd260e8f71dbe2f5737d24122f972158",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "brad-utils": "brad-utils",
+        "crane": "crane",
+        "fenix": "fenix",
+        "flake-utils": "flake-utils",
+        "nixpkgs": "nixpkgs",
+        "wgsl-analyzer": "wgsl-analyzer"
+      }
+    },
+    "rust-analyzer-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781529264,
+        "narHash": "sha256-aRRvzyZy3zdKEFMOZTklNlkuYpk3hz6gioqN8YVV6Nw=",
+        "owner": "rust-lang",
+        "repo": "rust-analyzer",
+        "rev": "888f5810a42a76a3b708b6f90e1fca8a02e3beb9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rust-lang",
+        "ref": "nightly",
+        "repo": "rust-analyzer",
+        "type": "github"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "wgsl-analyzer": {
+      "inputs": {
+        "crane": [
+          "crane"
+        ],
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781614975,
+        "narHash": "sha256-H0l5bCUdAAuRpcnRNTiqL5MkiMja+zFqhRoAtvxXdBg=",
+        "owner": "wgsl-analyzer",
+        "repo": "wgsl-analyzer",
+        "rev": "6bbf0e838d552ca36f118c04d61a4234d146bef5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "wgsl-analyzer",
+        "repo": "wgsl-analyzer",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

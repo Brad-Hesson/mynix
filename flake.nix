@@ -42,7 +42,7 @@
       devShell = crane.devShell {
         inputsFrom = [ crate ];
         shellHook = ''
-          ${brad-utils.vscodeSettingsHook {"wgsl-analyzer.server.path" =  "${wgsl-analyzer}/bin/wgsl-analyzer";}}
+          ${brad-utils.vscodeSettingsHook {}}
         '';
       };
     }
