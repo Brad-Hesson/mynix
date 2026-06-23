@@ -4,7 +4,7 @@ use colour::grey;
 use strum::{EnumIter, EnumProperty, IntoEnumIterator};
 use winnow::Result;
 use winnow::ascii::{Caseless, dec_int, float, multispace1, till_line_ending};
-use winnow::combinator::{delimited, not, peek, preceded, repeat, terminated, trace};
+use winnow::combinator::{delimited, eof, not, peek, preceded, repeat, terminated, trace};
 use winnow::error::ParserError;
 use winnow::stream::{AsBStr, AsChar, Compare, FindSlice, ParseSlice, Stream, StreamIsPartial};
 use winnow::token::{any, none_of, take_until, take_while};
@@ -48,7 +48,7 @@ where
     E: ParserError<I>,
 {
     let punct_to_p = |punct: Punct| literal(punct.as_str()).value(punct);
-    trace("punct_p", alt_iter(Punct::iter().map(punct_to_p))).parse_next(input)
+    alt_iter(Punct::iter().map(punct_to_p)).parse_next(input)
 }
 
 fn singleline_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -57,7 +57,7 @@ where
     E: ParserError<I>,
     I::Token: AsChar + Clone,
 {
-    trace("singleline_comment_p", preceded("#", till_line_ending)).parse_next(input)
+    preceded("#", till_line_ending).parse_next(input)
 }
 
 fn doc_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -65,11 +65,7 @@ where
     I: Stream + StreamIsPartial + Compare<&'static str> + FindSlice<&'static str>,
     E: ParserError<I>,
 {
-    trace(
-        "doc_comment_p",
-        delimited("/**", take_until(0.., "*/"), "*/"),
-    )
-    .parse_next(input)
+    delimited("/**", take_until(0.., "*/"), "*/").parse_next(input)
 }
 
 fn multiline_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -77,11 +73,7 @@ where
     I: Stream + StreamIsPartial + Compare<&'static str> + FindSlice<&'static str>,
     E: ParserError<I>,
 {
-    trace(
-        "multiline_comment_p",
-        delimited((peek(not("/**")), "/*"), take_until(0.., "*/"), "*/"),
-    )
-    .parse_next(input)
+    delimited(("/*", not("*")), take_until(0.., "*/"), "*/").parse_next(input)
 }
 
 fn ident_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -98,7 +90,9 @@ where
         let c = c.as_char();
         c.is_alphanum() || ['_', '-', '\''].contains(&c)
     }
-    trace("ident_p", (one_of(first), take_while(0.., rest)).take()).parse_next(input)
+    (one_of(first), take_while(0.., rest))
+        .take()
+        .parse_next(input)
 }
 
 fn strlit_p<I, E>(input: &mut I) -> Result<Vec<InterpPart<I>>, E>
@@ -112,7 +106,7 @@ where
         + Compare<Caseless<&'static str>>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
-    I::Slice: AsBStr + ParseSlice<f64>,
+    I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
     '"'.parse_next(input)?;
@@ -146,7 +140,7 @@ where
         + Compare<Caseless<&'static str>>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
-    I::Slice: AsBStr + ParseSlice<f64>,
+    I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
     "''".parse_next(input)?;
@@ -197,18 +191,24 @@ where
     inner.take()
 }
 
-fn int_p<I, E>(input: &mut I) -> Result<i64, E>
+fn number_p<I, E>(input: &mut I) -> Result<Token<I>, E>
 where
     I: Stream + StreamIsPartial,
     E: ParserError<I>,
-    I::Slice: AsBStr,
     I::Token: AsChar + Clone,
+    I::Slice: ParseSlice<f64> + ParseSlice<i64>,
 {
-    terminated(dec_int, peek(none_of('.'))).parse_next(input)
+    let num_p = || take_while(1.., (AsChar::is_dec_digit, '.', 'E', 'e', '+', '-'));
+    alt((
+        num_p().parse_to::<i64>().map(Token::Int),
+        num_p().parse_to::<f64>().map(Token::Float),
+    ))
+    .parse_next(input)
 }
+
 fn path_char<C: AsChar>(c: C) -> bool {
     let c = c.as_char();
-    c.is_alphanum() || ['.', '\\', '-', '_', '+', '/'].contains(&c)
+    c.is_alphanum() || ['.', '\\', '-', '_', '+'].contains(&c)
 }
 fn path_p<I, E>(input: &mut I) -> Result<Vec<InterpPart<I>>, E>
 where
@@ -221,19 +221,24 @@ where
         + Compare<Caseless<&'static str>>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
-    I::Slice: AsBStr + ParseSlice<f64>,
+    I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    repeat::<_, _, Vec<_>, _, _>(
-        1..,
-        alt((
-            take_while(1.., path_char).map(InterpPart::Str),
-            interp_p.map(InterpPart::Interp),
-        )),
+    preceded(
+        peek((take_while(0.., path_char), '/', take_while(0.., path_char))),
+        repeat::<_, _, Vec<_>, _, _>(
+            1..,
+            alt((
+                take_while(1.., (path_char, '/')).map(InterpPart::Str),
+                interp_p.map(InterpPart::Interp),
+            )),
+        ),
     )
     .verify(|parts: &Vec<_>| {
         parts.iter().any(|part| match part {
-            InterpPart::Str(s) => AsBStr::as_bstr(s).contains(&b'/'),
+            InterpPart::Str(s) => {
+                AsBStr::as_bstr(s).contains(&b'/') && AsBStr::as_bstr(s).iter().any(|b| *b != b'/')
+            }
             InterpPart::Interp(_) => false,
         })
     })
@@ -244,12 +249,35 @@ fn lookup_p<I, E>(input: &mut I) -> Result<I::Slice, E>
 where
     I: Stream + StreamIsPartial + Compare<char>,
     E: ParserError<I>,
-    I::Token: AsChar,
+    I::Token: AsChar + Clone,
     I::Slice: AsBStr,
 {
-    delimited('<', take_while(1.., path_char), '>')
-        .verify(|s| AsBStr::as_bstr(s).contains(&b'/'))
+    delimited('<', take_while(1.., (path_char, '/')), '>')
+        .verify(|s| {
+            AsBStr::as_bstr(s).contains(&b'/') && AsBStr::as_bstr(s).iter().any(|b| *b != b'/')
+        })
         .parse_next(input)
+}
+
+fn blank_p<I, E>(input: &mut I) -> Result<(), E>
+where
+    I: Stream
+        + StreamIsPartial
+        + Compare<&'static str>
+        + FindSlice<(char, char)>
+        + FindSlice<&'static str>,
+    E: ParserError<I>,
+    I::Token: AsChar + Clone,
+{
+    repeat::<_, _, (), _, _>(
+        0..,
+        alt((
+            multispace1,
+            trace("singleline_comment_p", singleline_comment_p),
+            trace("multiline_comment_p", multiline_comment_p),
+        )),
+    )
+    .parse_next(input)
 }
 
 pub fn token_p<I, E>(input: &mut I) -> Result<Token<I>, E>
@@ -263,29 +291,23 @@ where
         + Compare<Caseless<&'static str>>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
-    I::Slice: AsBStr + ParseSlice<f64>,
+    I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    repeat::<_, _, (), _, _>(
-        0..,
-        alt((multispace1, singleline_comment_p, multiline_comment_p)),
-    )
-    .parse_next(input)?;
-    alt((
-        doc_comment_p.map(Token::DocComment),
+    let tok_p = || {
         alt((
-            path_p.map(Token::Path),
-            lookup_p.map(Token::Lookup),
-            ident_p.map(Token::Ident),
-            interp_p.map(Token::Interp),
-            strlit_p.map(Token::StrLit),
-            indented_strlit_p.map(Token::IndentedStrLit),
-            int_p.map(Token::Int),
-            float.map(Token::Float),
-            punct_p.map(Token::Punct),
-        )),
-    ))
-    .parse_next(input)
+            trace("path_p", path_p).map(Token::Path),
+            trace("lookup_p", lookup_p).map(Token::Lookup),
+            trace("ident_p", ident_p).map(Token::Ident),
+            trace("doc_comment_p", doc_comment_p).map(Token::DocComment),
+            trace("punct_p", punct_p).map(Token::Punct),
+            trace("strlit_p", strlit_p).map(Token::StrLit),
+            trace("indented_strlit_p", indented_strlit_p).map(Token::IndentedStrLit),
+            trace("interp_p", interp_p).map(Token::Interp),
+            trace("number_p", number_p),
+        ))
+    };
+    alt((terminated(tok_p(), blank_p), preceded(blank_p, tok_p()))).parse_next(input)
 }
 
 fn interp_p<I, E>(input: &mut I) -> Result<Vec<Token<I>>, E>
@@ -299,7 +321,7 @@ where
         + Compare<Caseless<&'static str>>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
-    I::Slice: AsBStr + ParseSlice<f64>,
+    I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
     "${".parse_next(input)?;
@@ -324,18 +346,12 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumProperty)]
 pub enum Punct {
-    #[strum(props(lit = "=="))]
-    EqEq,
-    #[strum(props(lit = "="))]
-    Eq,
+    #[strum(props(lit = ";"))]
+    Semicolon,
     #[strum(props(lit = "{"))]
     OpenCurl,
     #[strum(props(lit = "}"))]
     CloseCurl,
-    #[strum(props(lit = "["))]
-    OpenSquare,
-    #[strum(props(lit = "]"))]
-    CloseSquare,
     #[strum(props(lit = "("))]
     OpenParen,
     #[strum(props(lit = ")"))]
@@ -344,8 +360,16 @@ pub enum Punct {
     Ellipses,
     #[strum(props(lit = "."))]
     Dot,
-    #[strum(props(lit = ";"))]
-    Semicolon,
+    #[strum(props(lit = "=="))]
+    EqEq,
+    #[strum(props(lit = "="))]
+    Eq,
+    #[strum(props(lit = ","))]
+    Comma,
+    #[strum(props(lit = "["))]
+    OpenSquare,
+    #[strum(props(lit = "]"))]
+    CloseSquare,
     #[strum(props(lit = ":"))]
     Colon,
     #[strum(props(lit = "//"))]
@@ -361,11 +385,9 @@ pub enum Punct {
     #[strum(props(lit = "-"))]
     Minus,
     #[strum(props(lit = "*"))]
-    Star,
+    Mul,
     #[strum(props(lit = "@"))]
     At,
-    #[strum(props(lit = ","))]
-    Comma,
     #[strum(props(lit = "?"))]
     Question,
     #[strum(props(lit = "<="))]
@@ -381,9 +403,9 @@ pub enum Punct {
     #[strum(props(lit = "!"))]
     Bang,
     #[strum(props(lit = "&&"))]
-    LogAnd,
+    LogicalAnd,
     #[strum(props(lit = "||"))]
-    LogOr,
+    LogicalOr,
 }
 impl Punct {
     pub fn as_str(&self) -> &'static str {
@@ -405,7 +427,6 @@ pub enum Token<I: Stream> {
     Int(i64),
     Float(f64),
 }
-
 
 impl Display for Token<&str> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -436,9 +457,7 @@ impl Display for Token<&str> {
                 colour::write_green!(f, "\"")
             }
 
-            Token::Path(items) => {
-                fmt_interp_parts(f, items, PartColour::Path)
-            }
+            Token::Path(items) => fmt_interp_parts(f, items, PartColour::Path),
 
             Token::Lookup(s) => {
                 colour::write_cyan!(f, "<{s}>")
@@ -457,7 +476,7 @@ impl Display for Token<&str> {
             }
 
             Token::Float(x) => {
-                colour::write_blue!(f, "{x}")
+                colour::write_blue!(f, "{x:.2}")
             }
         }
     }
