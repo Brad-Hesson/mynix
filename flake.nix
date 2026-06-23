@@ -8,12 +8,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     brad-utils.url = "github:Brad-Hesson/brad-utils";
-    wgsl-analyzer = {
-      url = "github:wgsl-analyzer/wgsl-analyzer";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-      inputs.crane.follows = "crane";
-    };
   };
   outputs = flakes: flakes.flake-utils.lib.eachDefaultSystem (system:
     let
