@@ -9,66 +9,48 @@ use winnow::{
     },
     error::{ModalError, ParserError},
     prelude::*,
-    stream::{AsBStr, AsChar, Compare, FindSlice, Location, ParseSlice, Stream, StreamIsPartial},
+    stream::{
+        Accumulate, AsBStr, AsChar, Compare, FindSlice, Location, ParseSlice, Stream,
+        StreamIsPartial,
+    },
     token::{any, literal, one_of, take_until, take_while},
 };
 
-// fn alt_iter<I, O, E>(it: impl IntoIterator<Item = impl Parser<I, O, E>>) -> impl Parser<I, O, E>
-// where
-//     I: Stream,
-//     E: ParserError<I>,
-// {
-//     let mut it = it.into_iter();
-//     trace("alt_iter", move |input: &mut I| {
-//         let mut error: Option<E> = None;
-//         let start = input.checkpoint();
-//         for mut branch in &mut it {
-//             input.reset(&start);
-//             match branch.parse_next(input) {
-//                 Err(e) if e.is_backtrack() => {
-//                     error = match error {
-//                         Some(error) => Some(error.or(e)),
-//                         None => Some(e),
-//                     };
-//                 }
-//                 res => return res,
-//             }
-//         }
-//         match error {
-//             Some(e) => Err(e.append(input, &start)),
-//             None => Err(ParserError::from_input(input)),
-//         }
-//     })
-// }
-
-fn punct_p<I, E>(input: &mut I) -> Result<Token, E>
+fn alt_iter<I, O, E>(it: impl IntoIterator<Item = impl Parser<I, O, E>>) -> impl Parser<I, O, E>
 where
-    I: Stream + StreamIsPartial + Compare<&'static str> + Location,
+    I: Stream,
     E: ParserError<I>,
-    I::Slice: AsBStr,
 {
-    let span = (|input: &mut I| {
-        let max_len = input.eof_offset();
-        let slice = input.peek_slice(3.min(max_len));
-        let bytes = slice.as_bstr();
-        for i in 0..Punct::COUNT {
-            let len = Punct::STRS[i].len();
-            if len > max_len {
-                continue;
-            }
-            if bytes[..len] == *Punct::STRS[i].as_bytes() {
-                input.next_slice(len);
-                return Ok(Punct::VARIANTS[i]);
+    let mut it = it.into_iter();
+    trace("alt_iter", move |input: &mut I| {
+        let mut error: Option<E> = None;
+        let start = input.checkpoint();
+        for mut branch in &mut it {
+            input.reset(&start);
+            match branch.parse_next(input) {
+                Err(e) if e.is_backtrack() => {
+                    error = match error {
+                        Some(error) => Some(error.or(e)),
+                        None => Some(e),
+                    };
+                }
+                res => return res,
             }
         }
-        Err(ParserError::from_input(input))
+        match error {
+            Some(e) => Err(e.append(input, &start)),
+            None => Err(ParserError::from_input(input)),
+        }
     })
-    .span()
-    .parse_next(input)?;
-    Ok(Token {
-        kind: Kind::Punct,
-        span: span.into(),
-    })
+}
+
+fn punct_p<I, E>(input: &mut I) -> Result<Punct, E>
+where
+    I: Stream + StreamIsPartial + Compare<&'static str>,
+    E: ParserError<I>,
+{
+    let punct_to_p = |punct: &'static Punct| literal(punct.as_str()).value(*punct);
+    alt_iter(Punct::VARIANTS.iter().map(punct_to_p)).parse_next(input)
 }
 
 fn singleline_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -80,18 +62,12 @@ where
     preceded("#", till_line_ending).parse_next(input)
 }
 
-fn doc_comment_p<I, E>(input: &mut I) -> Result<Token, E>
+fn doc_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
 where
     I: Stream + StreamIsPartial + Compare<&'static str> + FindSlice<&'static str> + Location,
     E: ParserError<I> + ModalError,
 {
-    preceded("/**", cut_err(terminated(take_until(0.., "*/"), "*/")))
-        .span()
-        .map(|span| Token {
-            kind: Kind::DocComment,
-            span: span.into(),
-        })
-        .parse_next(input)
+    preceded("/**", cut_err(terminated(take_until(0.., "*/"), "*/"))).parse_next(input)
 }
 
 fn multiline_comment_p<I, E>(input: &mut I) -> Result<I::Slice, E>
@@ -106,9 +82,9 @@ where
     .parse_next(input)
 }
 
-fn ident_p<I, E>(input: &mut I) -> Result<Token, E>
+fn ident_p<I, E>(input: &mut I) -> Result<I::Slice, E>
 where
-    I: Stream + StreamIsPartial + Compare<&'static str> + Location,
+    I: Stream + StreamIsPartial + Compare<&'static str>,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
 {
@@ -121,16 +97,13 @@ where
         c.is_alphanum() || ['_', '-', '\''].contains(&c)
     }
     (one_of(first), take_while(0.., rest))
-        .span()
-        .map(|span| Token {
-            kind: Kind::Ident,
-            span: span.into(),
-        })
+        .take()
         .parse_next(input)
 }
 
-fn strlit_p<I, E>(input: &mut I) -> Result<Token, E>
+fn strlit_p<I, E, A>(input: &mut I) -> Result<A, E>
 where
+    A: Accumulate<InterpPart<I>>,
     I: Stream
         + StreamIsPartial
         + Compare<&'static str>
@@ -144,30 +117,29 @@ where
     I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    (|input: &mut I| {
-        '"'.parse_next(input)?;
-        let ignore_p = alt((('\\', any).void(), "$$".void()));
-        let end_p = alt(("\"", "${"));
-        let mut str_part_p = escaped_take_until(ignore_p, end_p);
-        loop {
-            str_part_p.parse_next(input)?;
-            if opt(interp_p).parse_next(input)?.is_none() {
-                break;
-            }
+    '"'.parse_next(input)?;
+    let ignore_p = alt((('\\', any).void(), "$$".void()));
+    let end_p = alt(("\"", "${"));
+    let mut str_part_p = escaped_take_until(ignore_p, end_p);
+    let mut parts = A::initial(None);
+    loop {
+        let str_part = str_part_p.parse_next(input)?;
+        if !str_part.as_bstr().is_empty() {
+            parts.accumulate(InterpPart::Str(str_part));
         }
-        '"'.parse_next(input)?;
-        Ok(())
-    })
-    .span()
-    .map(|span| Token {
-        kind: Kind::StrLit,
-        span: span.into(),
-    })
-    .parse_next(input)
+        if let Some(interp) = opt(interp_p).parse_next(input)? {
+            parts.accumulate(InterpPart::Interp(interp));
+        } else {
+            break;
+        }
+    }
+    '"'.parse_next(input)?;
+    Ok(parts)
 }
 
-fn indented_strlit_p<I, E>(input: &mut I) -> Result<Token, E>
+fn indented_strlit_p<I, E, A>(input: &mut I) -> Result<A, E>
 where
+    A: Accumulate<InterpPart<I>>,
     I: Stream
         + StreamIsPartial
         + Compare<&'static str>
@@ -181,31 +153,29 @@ where
     I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    (|input: &mut I| {
-        "''".parse_next(input)?;
-        let ignore_p = alt((
-            ("''\\", any).void(),
-            "''$".void(),
-            "'''".void(),
-            "$$".void(),
-        ));
-        let end_p = alt(("''", "${"));
-        let mut str_part_p = escaped_take_until(ignore_p, end_p);
-        loop {
-            str_part_p.parse_next(input)?;
-            if opt(interp_p).parse_next(input)?.is_none() {
-                break;
-            }
+    "''".parse_next(input)?;
+    let ignore_p = alt((
+        ("''\\", any).void(),
+        "''$".void(),
+        "'''".void(),
+        "$$".void(),
+    ));
+    let end_p = alt(("''", "${"));
+    let mut str_part_p = escaped_take_until(ignore_p, end_p);
+    let mut parts = A::initial(None);
+    loop {
+        let str_part = str_part_p.parse_next(input)?;
+        if !str_part.as_bstr().is_empty() {
+            parts.accumulate(InterpPart::Str(str_part));
         }
-        "''".parse_next(input)?;
-        Ok(())
-    })
-    .span()
-    .map(|span| Token {
-        kind: Kind::IndentedStrLit,
-        span: span.into(),
-    })
-    .parse_next(input)
+        if let Some(interp) = opt(interp_p).parse_next(input)? {
+            parts.accumulate(InterpPart::Interp(interp));
+        } else {
+            break;
+        }
+    }
+    "''".parse_next(input)?;
+    Ok(parts)
 }
 
 fn escaped_take_until<I, E, O1, O2>(
@@ -231,27 +201,19 @@ where
     inner.take()
 }
 
-fn int_p<I, E>(input: &mut I) -> Result<Token, E>
+fn int_p<I, E>(input: &mut I) -> Result<i64, E>
 where
     I: Stream + StreamIsPartial + Compare<char> + Location,
     E: ParserError<I>,
     I::Token: AsChar,
     I::Slice: ParseSlice<i64>,
 {
-    tokenize(Kind::Int, take_while(1.., AsChar::is_dec_digit)).parse_next(input)
+    take_while(1.., AsChar::is_dec_digit)
+        .parse_to()
+        .parse_next(input)
 }
 
-fn tokenize<I, O, E>(kind: Kind, parser: impl Parser<I, O, E>) -> impl Parser<I, Token, E>
-where
-    I: Stream + Location,
-{
-    parser.span().map(move |span| Token {
-        kind,
-        span: span.into(),
-    })
-}
-
-fn float_p<I, E>(input: &mut I) -> Result<Token, E>
+fn float_p<I, E>(input: &mut I) -> Result<f64, E>
 where
     I: Stream + StreamIsPartial + Compare<char> + Location,
     E: ParserError<I>,
@@ -263,25 +225,14 @@ where
         matches!(c.as_char(), '1'..='9')
     }
     let exp_p = || (one_of(('e', 'E')), opt(one_of(('+', '-'))), digits_p(1));
-    tokenize(
-        Kind::Float,
-        alt((
-            (one_of(nonzero), digits_p(0), '.', digits_p(0), opt(exp_p())).void(),
-            (opt('0'), '.', digits_p(1), opt(exp_p())).void(),
-            (digits_p(1), exp_p()).void(),
-        )),
-    )
+    alt((
+        (one_of(nonzero), digits_p(0), '.', digits_p(0), opt(exp_p())).void(),
+        (opt('0'), '.', digits_p(1), opt(exp_p())).void(),
+        (digits_p(1), exp_p()).void(),
+    ))
+    .take()
+    .parse_to()
     .parse_next(input)
-}
-
-fn number_p<I, E>(input: &mut I) -> Result<Token, E>
-where
-    I: Stream + StreamIsPartial + Compare<char> + Location,
-    E: ParserError<I>,
-    I::Token: AsChar + Clone,
-    I::Slice: ParseSlice<f64> + ParseSlice<i64>,
-{
-    alt((float_p, int_p)).parse_next(input)
 }
 
 fn path_char<C: AsChar>(c: C) -> bool {
@@ -289,8 +240,9 @@ fn path_char<C: AsChar>(c: C) -> bool {
     c.is_alphanum() || ['.', '-', '_', '+'].contains(&c)
 }
 
-fn path_p<I, E>(input: &mut I) -> Result<Token, E>
+fn path_p<I, E, A>(input: &mut I) -> Result<A, E>
 where
+    A: Accumulate<InterpPart<I>>,
     I: Stream
         + StreamIsPartial
         + Compare<&'static str>
@@ -304,37 +256,35 @@ where
     I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    tokenize(Kind::Path, |input: &mut I| {
-        let pchars_p = || take_while(1.., path_char);
-        (
-            opt(alt((pchars_p().void(), '~'.void()))),
-            '/',
-            repeat::<_, _, (), _, _>(0.., (pchars_p(), '/')),
-            alt((pchars_p().void(), peek('$').void())),
-        )
-            .take()
-            .parse_next(input)?;
-        while opt(interp_p).parse_next(input)?.is_some() {
-            let mut rest = opt(take_while(1.., (path_char, '/')));
-            rest.parse_next(input)?;
+    let pchars_p = || take_while(1.., path_char);
+    let path_start = (
+        opt(alt((pchars_p().void(), '~'.void()))),
+        '/',
+        repeat::<_, _, (), _, _>(0.., (pchars_p(), '/')),
+        alt((pchars_p().void(), peek('$').void())),
+    )
+        .take()
+        .parse_next(input)?;
+    let mut parts = A::initial(None);
+    parts.accumulate(InterpPart::Str(path_start));
+    while let Some(interp) = opt(interp_p).parse_next(input)? {
+        parts.accumulate(InterpPart::Interp(interp));
+        let mut rest = opt(take_while(1.., (path_char, '/')));
+        if let Some(s) = rest.parse_next(input)? {
+            parts.accumulate(InterpPart::Str(s));
         }
-        Ok(())
-    })
-    .parse_next(input)
+    }
+    Ok(parts)
 }
 
-fn lookup_p<I, E>(input: &mut I) -> Result<Token, E>
+fn lookup_p<I, E>(input: &mut I) -> Result<I::Slice, E>
 where
     I: Stream + StreamIsPartial + Compare<char> + Location,
     E: ParserError<I>,
     I::Token: AsChar + Clone,
     I::Slice: AsBStr,
 {
-    tokenize(
-        Kind::Lookup,
-        delimited('<', take_while(1.., (path_char, '/')), '>'),
-    )
-    .parse_next(input)
+    delimited('<', take_while(1.., (path_char, '/')), '>').parse_next(input)
 }
 
 fn blank_p<I, E>(input: &mut I) -> Result<(), E>
@@ -374,21 +324,28 @@ where
     I::IterOffsets: Clone,
 {
     alt((
-        trace("path_p", path_p),
-        trace("ident_p", ident_p),
-        trace("strlit_p", strlit_p),
-        trace("indented_strlit_p", indented_strlit_p),
-        trace("interp_p", interp_p),
-        trace("lookup_p", lookup_p),
-        trace("doc_comment_p", doc_comment_p),
-        trace("number_p", number_p),
-        trace("punct_p", punct_p),
+        trace("path_p", path_p::<_, _, ()>.tokenize(Kind::Path)),
+        trace("ident_p", ident_p.tokenize(Kind::Ident)),
+        trace("strlit_p", strlit_p::<_, _, ()>.tokenize(Kind::StrLit)),
+        trace(
+            "indented_strlit_p",
+            indented_strlit_p::<_, _, ()>.tokenize(Kind::IndentedStrLit),
+        ),
+        trace("interp_p", interp_p.tokenize(Kind::Interp)),
+        trace("lookup_p", lookup_p.tokenize(Kind::Lookup)),
+        trace("doc_comment_p", doc_comment_p.tokenize(Kind::DocComment)),
+        alt((
+            trace("float_p", float_p.tokenize(Kind::Float)),
+            trace("int_p", int_p.tokenize(Kind::Int)),
+        )),
+        trace("punct_p", punct_p.tokenize(Kind::Punct)),
     ))
     .parse_next(input)
 }
 
-pub fn file_p<I, E>(input: &mut I) -> Result<Vec<Token>, E>
+pub fn file_p<I, E, A>(input: &mut I) -> Result<A, E>
 where
+    A: Accumulate<Token>,
     I: Stream
         + StreamIsPartial
         + Compare<&'static str>
@@ -405,7 +362,7 @@ where
     delimited(blank_p, repeat(0.., terminated(token_p, blank_p)), eof).parse_next(input)
 }
 
-fn interp_p<I, E>(input: &mut I) -> Result<Token, E>
+fn interp_p<I, E>(input: &mut I) -> Result<I::Slice, E>
 where
     I: Stream
         + StreamIsPartial
@@ -420,38 +377,33 @@ where
     I::Slice: AsBStr + ParseSlice<f64> + ParseSlice<i64>,
     I::IterOffsets: Clone,
 {
-    tokenize(Kind::Interp, |input: &mut I| {
-        "${".parse_next(input)?;
+    "${".parse_next(input)?;
+    let inside = (|input: &mut I| {
         let mut depth = 0;
-        let mut tokens = Vec::new();
         loop {
             blank_p.parse_next(input)?;
-            let (tok, slice) = token_p.with_taken().parse_next(input)?;
-            match &tok.kind {
-                Kind::Punct => {
-                    let punct = Punct::STRS
-                        .iter()
-                        .zip(Punct::VARIANTS)
-                        .find_map(|(s, var)| (s.as_bytes() == slice.as_bstr()).then_some(*var))
-                        .unwrap();
-                    match punct {
-                        Punct::OpenCurl => depth += 1,
-                        Punct::CloseCurl => {
-                            if depth == 0 {
-                                break;
-                            }
-                            depth -= 1;
+            let before = input.checkpoint();
+            let tok = token_p.parse_next(input)?;
+            if tok.kind == Kind::Punct {
+                input.reset(&before);
+                match punct_p.parse_next(input)? {
+                    Punct::OpenCurl => depth += 1,
+                    Punct::CloseCurl => {
+                        if depth == 0 {
+                            input.reset(&before);
+                            return Ok(());
                         }
-                        _ => {}
+                        depth -= 1
                     }
+                    _ => {}
                 }
-                _ => {}
             }
-            tokens.push(tok);
         }
-        Ok(tokens)
     })
-    .parse_next(input)
+    .take()
+    .parse_next(input)?;
+    "}".parse_next(input)?;
+    Ok(inside)
 }
 
 const fn lit(lit: &str) -> u32 {
@@ -563,15 +515,63 @@ pub struct Token {
     pub kind: Kind,
     pub span: Span,
 }
-// impl Token{
-//     fn new
-// }
+impl Token {
+    pub fn as_colored_string(self, src: &str) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        match self.kind {
+            Kind::DocComment => colour::write_gray!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Interp => colour::write_red!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::IndentedStrLit => {
+                colour::write_green!(s, "{}", &src[self.span.start..self.span.end])
+            }
+            Kind::StrLit => colour::write_green!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Path => colour::write_cyan!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Lookup => colour::write_cyan!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Ident => colour::write_white!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Punct => colour::write_yellow!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Int => colour::write_blue!(s, "{}", &src[self.span.start..self.span.end]),
+            Kind::Float => colour::write_blue!(s, "{}", &src[self.span.start..self.span.end]),
+        }
+        .unwrap();
+        s
+    }
+}
 
-// #[derive(Debug, PartialEq)]
-// pub enum InterpPart<I: Stream> {
-//     Str(I::Slice),
-//     Interp(Vec<Token<I>>),
-// }
+trait Tokenize<I, O, E>: Parser<I, O, E> + Sized
+where
+    I: Stream + Location,
+{
+    fn tokenize(self, kind: Kind) -> impl Parser<I, Token, E> {
+        self.span().map(move |span| Token {
+            kind,
+            span: span.into(),
+        })
+    }
+    fn with_token(self, kind: Kind) -> impl Parser<I, (O, Token), E> {
+        self.with_span().map(move |(output, span)| {
+            (
+                output,
+                Token {
+                    kind,
+                    span: span.into(),
+                },
+            )
+        })
+    }
+}
+impl<I, O, E, P> Tokenize<I, O, E> for P
+where
+    P: Parser<I, O, E>,
+    I: Stream + Location,
+{
+}
+
+#[derive(Debug, PartialEq)]
+pub enum InterpPart<I: Stream> {
+    Str(I::Slice),
+    Interp(I::Slice),
+}
 
 // #[cfg(test)]
 // mod tests {
