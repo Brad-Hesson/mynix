@@ -202,7 +202,7 @@ where
     I::Token: AsChar,
     I::Slice: ParseSlice<i64>,
 {
-    (opt('-'), take_while(1.., AsChar::is_dec_digit))
+    take_while(1.., AsChar::is_dec_digit)
         .take()
         .parse_to::<i64>()
         .parse_next(input)
@@ -216,18 +216,18 @@ where
     I::Slice: ParseSlice<f64>,
 {
     let digits_p = |x: usize| take_while(x.., AsChar::is_dec_digit);
+    fn nonzero<C: AsChar>(c: C) -> bool {
+        matches!(c.as_char(), '1'..='9')
+    }
     let exp_p = || (one_of(('e', 'E')), opt(one_of(('+', '-'))), digits_p(1));
-    (
-        opt('-'),
-        alt((
-            ('.', digits_p(1), opt(exp_p())).void(),
-            (digits_p(1), '.', digits_p(0), opt(exp_p())).void(),
-            (digits_p(1), exp_p()).void(),
-        )),
-    )
-        .take()
-        .parse_to()
-        .parse_next(input)
+    alt((
+        (one_of(nonzero), digits_p(0), '.', digits_p(0), opt(exp_p())).void(),
+        (opt('0'), '.', digits_p(1), opt(exp_p())).void(),
+        (digits_p(1), exp_p()).void(),
+    ))
+    .take()
+    .parse_to()
+    .parse_next(input)
 }
 
 fn number_p<I, E>(input: &mut I) -> Result<Token<I>, E>
@@ -332,8 +332,8 @@ where
         trace("interp_p", interp_p).map(Token::Interp),
         trace("lookup_p", lookup_p).map(Token::Lookup),
         trace("doc_comment_p", doc_comment_p).map(Token::DocComment),
-        trace("punct_p", punct_p).map(Token::Punct),
         trace("number_p", number_p),
+        trace("punct_p", punct_p).map(Token::Punct),
     ))
     .parse_next(input)
 }
@@ -2201,5 +2201,46 @@ mod tests {
     #[test]
     fn rejects_int_over_i64_max() {
         assert_rejects("9223372036854775808");
+    }
+
+    #[test]
+    fn leading_dot_float() {
+        assert_tokens(".25", vec![Token::Float(0.25)]);
+    }
+
+    #[test]
+    fn negative_int_is_unary_minus() {
+        assert_tokens("-1", vec![Token::Punct(Punct::Minus), Token::Int(1)]);
+    }
+
+    #[test]
+    fn negative_leading_dot_float_is_unary_minus() {
+        assert_tokens("-.25", vec![Token::Punct(Punct::Minus), Token::Float(0.25)]);
+    }
+
+    #[test]
+    fn infix_minus_not_greedy_number() {
+        assert_tokens(
+            "1-2",
+            vec![Token::Int(1), Token::Punct(Punct::Minus), Token::Int(2)],
+        );
+    }
+
+    #[test]
+    fn infix_plus_not_greedy_number() {
+        assert_tokens(
+            "1+2",
+            vec![Token::Int(1), Token::Punct(Punct::Plus), Token::Int(2)],
+        );
+    }
+
+    #[test]
+    fn one_dot_is_float_for_nix_compat() {
+        assert_tokens("1.", vec![Token::Float(1.0)]);
+    }
+
+    #[test]
+    fn zero_dot_is_not_float_for_nix_compat() {
+        assert_tokens("0.", vec![Token::Int(0), Token::Punct(Punct::Dot)]);
     }
 }

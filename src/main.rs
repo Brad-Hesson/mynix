@@ -17,10 +17,9 @@ fn main() {
     for _ in 0..2u64.pow(10) {
         for tok in p.parse(src).unwrap() {
             num += 1;
-            // print!("{} ", tok);
-            // print!("({})[{:?}]", tok.0, tok.1);
-            // std::io::stdout().flush().unwrap();
+            print!("{} ", tok);
         }
+        break;
     }
     println!("{num}");
 }
