@@ -1,8 +1,9 @@
-use std::io::Write;
+use winnow::{
+    Parser,
+    error::{EmptyError, ErrMode},
+};
 
-use winnow::{LocatingSlice, Parser, error::InputError};
-
-use crate::lexer::{Token, token_p};
+use crate::lexer::file_p;
 
 mod lexer;
 
@@ -11,16 +12,15 @@ fn main() {
     // let text = std::fs::read_to_string("./flake.nix").unwrap();
     let src = text.as_str();
     // while let Ok(tok) = token_p::<_, InputError<_>>(&mut src) {
-    let mut p = token_p::<_, InputError<_>>.with_span();
+    let mut p = file_p::<_, ErrMode<EmptyError>>;
     let mut num = 0;
-    for _ in 0..2u64.pow(13) {
-        for tok in p.parse_iter(LocatingSlice::new(src)) {
-            let tok = tok.unwrap();
+    for _ in 0..2u64.pow(10) {
+        for tok in p.parse(src).unwrap() {
             num += 1;
-            print!("{tok:?} ");
+            // print!("{} ", tok);
+            // print!("({})[{:?}]", tok.0, tok.1);
             // std::io::stdout().flush().unwrap();
         }
-        break;
     }
     println!("{num}");
 }

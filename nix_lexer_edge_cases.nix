@@ -183,8 +183,8 @@ third physical line";
     f = foo/bar;
     g = foo/bar/baz;
     h = foo.bar/baz-qux+1;
-    # parentRelative = ../parent-dir/file+name_1.2;
-    # home = ~/.config/nix/nix.conf;
+    parentRelative = ../parent-dir/file+name_1.2;
+    home = ~/.config/nix/nix.conf;
     lookup = <nixpkgs/lib>;
 
     # Interpolated path: path lexing must enter expression mode at ${...} and resume path mode.
