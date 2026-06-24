@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 colour = "2.1.0"
+smallvec = "1.15.2"
 strum = { version = "0.28.0", features = ["derive"] }
 winnow = "1.0.3"
 
